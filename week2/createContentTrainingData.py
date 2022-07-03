@@ -6,10 +6,23 @@ import os
 import random
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import re
+from nltk.stem import SnowballStemmer
+import pandas as pd
+
+sb_stemmer = SnowballStemmer("english")
 
 def transform_name(product_name):
-    # IMPLEMENT
-    return product_name
+    # replace / to space
+    pm_slashes_replaced = re.sub('/', " ", product_name)
+    # remove all non-alphanumeric characters other than underscore or space and lower everything
+    pm_lower_alphanum = ''.join([c.lower() for c in pm_slashes_replaced if c.isalnum() or c == ' ' or c == '_'])
+    # trim excess spaces
+    pm_lower_alphanum = re.sub(' +', " ", pm_lower_alphanum)
+    # stemming
+    token_list = pm_lower_alphanum.split()
+    pm_stem = [sb_stemmer.stem(t) for t in token_list]
+    return ' '.join(pm_stem)
 
 # Directory for product data
 directory = r'/workspace/datasets/product_data/products/'
@@ -37,7 +50,6 @@ if os.path.isdir(output_dir) == False:
 
 if args.input:
     directory = args.input
-# IMPLEMENT:  Track the number of items in each category and only output if above the min
 min_products = args.min_products
 sample_rate = args.sample_rate
 names_as_labels = False
@@ -70,13 +82,37 @@ def _label_filename(filename):
 
 if __name__ == '__main__':
     files = glob.glob(f'{directory}/*.xml')
+    df_file = os.path.splitext(output_file)[0]+'_df.csv'
+    training_data_file = os.path.splitext(output_file)[0]+'.train'
+    test_data_file = os.path.splitext(output_file)[0]+'.test'
 
+    all_datasets_df = pd.DataFrame(columns=['category', 'name'])
     print("Writing results to %s" % output_file)
     with multiprocessing.Pool() as p:
         all_labels = tqdm(p.imap_unordered(_label_filename, files), total=len(files))
-
 
         with open(output_file, 'w') as output:
             for label_list in all_labels:
                 for (cat, name) in label_list:
                     output.write(f'__label__{cat} {name}\n')
+                    # get same data in a data frame object
+                    all_datasets_df = pd.concat([all_datasets_df, pd.DataFrame({'category':f'__label__{cat}', 'name':name}, index=[0])], axis=0, ignore_index=True)
+    
+    # shuffle the data
+    # output_file = '/workspace/datasets/fasttext/labeled_products_stemmed.txt'
+    # df_file = '/workspace/datasets/fasttext/labeled_products_stemmed_df.csv'
+    # all_datasets_df = pd.read_csv(df_file)
+    all_datasets_df = all_datasets_df.sample(frac=1).reset_index(drop=True)
+    
+    # store all of it
+    all_datasets_df.to_csv(df_file, index=False)
+
+    # store train and test in format for fasttext
+    if min_products > 0:
+        all_datasets_df = all_datasets_df.groupby('category').filter(lambda x : len(x)>=min_products)
+    all_datasets_df.head(10000).to_csv(training_data_file, sep=' ', index=False, header=False, quoting=csv.QUOTE_NONE, quotechar = "", escapechar = " ")
+    all_datasets_df.tail(10000).to_csv(test_data_file, sep=' ', index=False, header=False, quoting=csv.QUOTE_NONE, quotechar = "", escapechar = " ")
+
+    # store only titels in a separate file
+    all_datasets_df
+
