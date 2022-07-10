@@ -13,11 +13,11 @@ stemmer = nltk.stem.PorterStemmer()
 categories_file_name = r'/workspace/datasets/product_data/categories/categories_0001_abcat0010000_to_pcmcat99300050000.xml'
 
 queries_file_name = r'/workspace/datasets/train.csv'
-output_file_name = r'/workspace/datasets/labeled_query_data.txt'
+output_file_name = r'/workspace/datasets/labeled_queries.txt'
 
 parser = argparse.ArgumentParser(description='Process arguments.')
 general = parser.add_argument_group("general")
-general.add_argument("--min_queries", default=1,  help="The minimum number of queries per category label (default is 1)")
+general.add_argument("--min_queries", default=10000,  help="The minimum number of queries per category label (default is 1)")
 general.add_argument("--output", default=output_file_name, help="the file to output to")
 general.add_argument("--update_successively", default=True, help="Updating categories to parent categories one by one?")
 
@@ -27,6 +27,7 @@ update_successively = args.update_successively
 
 if args.min_queries:
     min_queries = int(args.min_queries)
+    output_file_name = output_file_name.replace('.txt',f'_{min_queries}.txt')
 
 # The root category, named Best Buy with id cat00000, doesn't have a parent.
 root_category_id = 'cat00000'
@@ -69,6 +70,7 @@ def normalize(query):
 df['query'] = df['query'].apply(normalize)
 
 # IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
+min_count = 0
 while min_count < min_queries:
     counts_df = df.groupby('category').size().reset_index(name='counts').sort_index()
     min_count = min(counts_df.counts)
@@ -80,6 +82,7 @@ while min_count < min_queries:
         categories_to_update = counts_df[counts_df.counts == min_count].category
         update_dict = parents_df.loc[categories_to_update].to_dict()['parent']
         df.category.replace(update_dict, inplace=True)
+print(f'using min_queries: {min_queries} resulted in {df.category.nunique()} unique categories')
 
 # Create labels in fastText format.
 df['label'] = '__label__' + df['category']

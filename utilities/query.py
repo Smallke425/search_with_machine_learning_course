@@ -11,7 +11,14 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
+import nltk
+import fasttext
+import re
 
+from nltk.stem.snowball import SnowballStemmer
+stemmer = SnowballStemmer("english")
+
+model = fasttext.load_model('/workspace/datasets/model_10000_lr05_epoch5_bigrams.bin')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -186,16 +193,56 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
     return query_obj
 
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc"):
+def normalize(query):
+    # replace / to space
+    query_normalized = re.sub('/', " ", query)
+    # treat all non-alphanumeric characters as space and lower everything else
+    query_normalized = ''.join([c.lower() if c.isalnum() else ' ' for c in query_normalized])
+    # trim excess spaces
+    query_normalized = re.sub(' +', " ", query_normalized)
+    query_normalized = query_normalized.strip()
+    # stemming
+    query_normalized = ' '.join([stemmer.stem(t) for t in query_normalized.split()])
+    return query_normalized
+
+
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_prediction_filter=True, min_p=0.5):
     #### W3: classify the query
     #### W3: create filters and boosts
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+    filters = None
+    if use_prediction_filter:
+        user_query = normalize(user_query)
+        prediction = model.predict(user_query, k=3)
+        print('predicted categories: ', prediction[0])
+        print('probabilities: ', prediction[1])
+        categories = [pred.replace('__label__', '') for pred, p in zip(*prediction) if p >= min_p]
+        if len(categories) > 0:
+            filters = {
+                "terms": {
+                    "categoryPathIds": categories
+                }
+            }
+    query_obj = create_query(user_query, click_prior_query=None, filters=filters)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
         hits = response['hits']['hits']
-        print(json.dumps(response, indent=2))
+        if use_prediction_filter:
+            print(f'found {len(hits)} hit(s) for cateogries {categories}')
+        else:
+            print(f'found {len(hits)} hit(s) without filtering categories')
+        for hit in hits[:5]:
+            print('-----------------------')
+            print(hit['_source']['name'][0])
+            #print('  type:', hit['_source']['type'][0])
+            #print('  regularPrice:', hit['_source']['regularPrice'][0])
+            print('  categoryPath:', hit['_source']['categoryPath'])
+            print('  categoryPathIds:', hit['_source']['categoryPathIds'])
+            #print('  class:', hit['_source']['class'][0])
+            #print('  subclass:', hit['_source']['subclass'][0])
+            #print('  department:', hit['_source']['department'][0])
+            #print(json.dumps(hit, indent=2))
 
 
 if __name__ == "__main__":
@@ -246,7 +293,8 @@ if __name__ == "__main__":
         if query == "Exit":
             break
         search(client=opensearch, user_query=query, index=index_name)
-
-        print(query_prompt)
+        print('\n\n\n... now searching without filter:\n')
+        search(client=opensearch, user_query=query, index=index_name, use_prediction_filter=False)
+        print('\n', query_prompt)
 
     
